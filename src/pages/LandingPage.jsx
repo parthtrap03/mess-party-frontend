@@ -15,10 +15,13 @@ const LandingPage = () => {
     const [partyStatus, setPartyStatus] = useState(null);
     const [userRole, setUserRole] = useState(null); // 'host' or 'guest'
     const [isAuthenticating, setIsAuthenticating] = useState(false);
-    const [showPasswordScreen, setShowPasswordScreen] = useState(true); // Show password gate by default
+
+    // Initialize from localStorage to prevent flashing
+    const [showPasswordScreen, setShowPasswordScreen] = useState(() => {
+        const token = localStorage.getItem('partySessionToken');
+        return !token; // If token exists, don't show password screen
+    });
     const [passwordInput, setPasswordInput] = useState('');
-
-
 
     // Fetch party status on mount and poll
     useEffect(() => {
@@ -56,6 +59,7 @@ const LandingPage = () => {
                         if (data.token) localStorage.setItem('partySessionToken', data.token);
                         setUserRole(data.role);
                         setPartyStatus(data);
+                        setShowPasswordScreen(false); // Valid session, hide password screen
                     } else {
                         // Even on 403 (Party Over), parse data for display
                         const data = await response.json();
@@ -87,7 +91,8 @@ const LandingPage = () => {
                         setShowPasswordScreen(true);
                     }
 
-                    setPartyStatus(data);
+                    // Force update to ensure re-render
+                    setPartyStatus(prev => ({ ...data, _ts: Date.now() }));
                 } catch (error) {
                     console.error('Failed to fetch party status:', error);
                 }
@@ -95,6 +100,7 @@ const LandingPage = () => {
 
             // Start polling
             pollInterval = setInterval(fetchStatus, 5000);
+            fetchStatus(); // Initial fetch
         };
 
         // Debounce to prevent double-fire in Strict Mode
@@ -153,15 +159,13 @@ const LandingPage = () => {
                 setUserRole(data.role);
                 setPartyStatus(data);
                 setPasswordInput(''); // Clear input
+                setShowPasswordScreen(false); // Hide password gate for everyone on successful login
 
                 // Only admin can proceed past the password gate
                 if (data.role === 'host') {
-                    setShowPasswordScreen(false); // Hide password gate for admin
                     // Admin stays on landing page to see pills and can click Red Pill
                 } else {
-                    // Guests are blocked - show message
-                    alert('Access granted as Guest. The party is already in progress. Please wait on this screen.');
-                    // Password screen stays visible for guests
+                    // Guests stay on landing page but see waiting message
                 }
             } else {
                 // Invalid password
@@ -349,173 +353,188 @@ const LandingPage = () => {
             {/* Matrix Pill Choice */}
             <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
                 <div className="flex gap-8 md:gap-12 items-center pointer-events-auto">
-                    {/* Red Pill - Enter (Host Only) */}
-                    <div className="flex flex-col items-center gap-4">
-                        <button
-                            onClick={async (e) => {
-                                e.stopPropagation();
+                    {/* Guest Waiting Message */}
+                    {userRole === 'guest' ? (
+                        <div className="flex flex-col items-center gap-6 animate-pulse">
+                            <h2 className="text-4xl font-black text-blue-500 uppercase tracking-tighter" style={{ textShadow: '0 0 20px rgba(0, 100, 255, 0.5)' }}>
+                                WAITING FOR SIGNAL...
+                            </h2>
+                            <p className="text-blue-300 font-mono text-lg tracking-widest uppercase">
+                                SYSTEM STANDBY
+                            </p>
+                            <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                    ) : (
+                        <>
+                            {/* Red Pill - Enter (Host Only) */}
+                            <div className="flex flex-col items-center gap-4">
+                                <button
+                                    onClick={async (e) => {
+                                        e.stopPropagation();
 
-                                // Only admin can access home page
-                                if (userRole !== 'host') {
-                                    return; // Guests cannot click
-                                }
+                                        // Only admin can access home page
+                                        if (userRole !== 'host') {
+                                            return; // Guests cannot click
+                                        }
 
-                                try {
-                                    const storedToken = localStorage.getItem('partySessionToken');
-                                    const headers = { 'Content-Type': 'application/json' };
-                                    if (storedToken) headers['x-session-token'] = storedToken;
+                                        try {
+                                            const storedToken = localStorage.getItem('partySessionToken');
+                                            const headers = { 'Content-Type': 'application/json' };
+                                            if (storedToken) headers['x-session-token'] = storedToken;
 
-                                    // Background authentication
-                                    fetch(`${API_BASE}/party/authenticate`, {
-                                        method: 'POST',
-                                        headers,
-                                        body: JSON.stringify({ passkey: 'welcome' })
-                                    }).then(res => res.json()).then(data => {
-                                        if (data.token) localStorage.setItem('partySessionToken', data.token);
-                                    }).catch(console.error);
+                                            // Background authentication
+                                            fetch(`${API_BASE}/party/authenticate`, {
+                                                method: 'POST',
+                                                headers,
+                                                body: JSON.stringify({ passkey: 'welcome' })
+                                            }).then(res => res.json()).then(data => {
+                                                if (data.token) localStorage.setItem('partySessionToken', data.token);
+                                            }).catch(console.error);
 
-                                    // Navigate to Home (Admin only)
-                                    navigate('/home');
-                                } catch (error) {
-                                    console.error('Navigation failed:', error);
-                                    navigate('/home'); // Fallback
-                                }
-                            }}
-                            disabled={userRole !== 'host'}
-                            className="group relative rounded-full overflow-hidden transition-all duration-500 hover:scale-110 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
-                            style={{
-                                width: `${8 + intensity * 2}rem`,
-                                height: `${8 + intensity * 2}rem`,
-                                background: userRole === 'host'
-                                    ? 'radial-gradient(circle at 30% 30%, #ff4444, #cc0000, #880000)'
-                                    : 'radial-gradient(circle at 30% 30%, #666, #444, #222)',
-                                boxShadow: userRole === 'host'
-                                    ? `0 0 ${30 + intensity * 3}px rgba(255, 0, 0, ${0.5 + intensity * 0.05}), inset 0 0 20px rgba(255, 100, 100, 0.3)`
-                                    : 'none',
-                            }}
-                        >
-                            {/* Realistic CSS Gear Implementation */}
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
-                                <div
-                                    className="gears-container"
+                                            // Navigate to Home (Admin only)
+                                            navigate('/home');
+                                        } catch (error) {
+                                            console.error('Navigation failed:', error);
+                                            navigate('/home'); // Fallback
+                                        }
+                                    }}
+                                    disabled={userRole !== 'host'}
+                                    className="group relative rounded-full overflow-hidden transition-all duration-500 hover:scale-110 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
                                     style={{
-                                        fontSize: `${1.5 + intensity * 0.5}rem`, // Gear scales with intensity
-                                        opacity: 0.4 + (intensity * 0.04)        // Becomes more visible
+                                        width: `${8 + intensity * 2}rem`,
+                                        height: `${8 + intensity * 2}rem`,
+                                        background: userRole === 'host'
+                                            ? 'radial-gradient(circle at 30% 30%, #ff4444, #cc0000, #880000)'
+                                            : 'radial-gradient(circle at 30% 30%, #666, #444, #222)',
+                                        boxShadow: userRole === 'host'
+                                            ? `0 0 ${30 + intensity * 3}px rgba(255, 0, 0, ${0.5 + intensity * 0.05}), inset 0 0 20px rgba(255, 100, 100, 0.3)`
+                                            : 'none',
                                     }}
                                 >
+                                    {/* Realistic CSS Gear Implementation */}
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
+                                        <div
+                                            className="gears-container"
+                                            style={{
+                                                fontSize: `${1.5 + intensity * 0.5}rem`, // Gear scales with intensity
+                                                opacity: 0.4 + (intensity * 0.04)        // Becomes more visible
+                                            }}
+                                        >
+                                            <div
+                                                className="gear-rotate"
+                                                style={{
+                                                    animationDuration: `${1.5 / (1 + intensity * 0.3)}s` // Spins faster with intensity
+                                                }}
+                                            ></div>
+                                        </div>
+                                    </div>
+
+                                    {/* Ripple effect on hover */}
                                     <div
-                                        className="gear-rotate"
+                                        className="absolute inset-0 opacity-0 group-hover:opacity-100"
                                         style={{
-                                            animationDuration: `${1.5 / (1 + intensity * 0.3)}s` // Spins faster with intensity
+                                            background: 'radial-gradient(circle, rgba(255, 100, 100, 0.6) 0%, transparent 70%)',
+                                            animation: 'ripple 1.5s ease-out infinite'
                                         }}
-                                    ></div>
-                                </div>
+                                    />
+                                    <div
+                                        className="absolute inset-0 animate-pulse"
+                                        style={{
+                                            background: 'radial-gradient(circle at 50% 50%, rgba(255, 100, 100, 0.4), transparent)',
+                                            animation: 'redPulse 3s ease-in-out infinite'
+                                        }}
+                                    />
+                                    <div className="relative z-10 flex items-center justify-center h-full">
+                                        <ArrowRight className="w-12 h-12 text-white drop-shadow-lg transition-transform group-hover:translate-x-1" />
+                                    </div>
+                                </button>
+                                <span className="font-mono text-sm md:text-base text-red-500 tracking-wider uppercase font-bold">
+                                    Enter
+                                </span>
                             </div>
 
-                            {/* Ripple effect on hover */}
-                            <div
-                                className="absolute inset-0 opacity-0 group-hover:opacity-100"
-                                style={{
-                                    background: 'radial-gradient(circle, rgba(255, 100, 100, 0.6) 0%, transparent 70%)',
-                                    animation: 'ripple 1.5s ease-out infinite'
-                                }}
-                            />
-                            <div
-                                className="absolute inset-0 animate-pulse"
-                                style={{
-                                    background: 'radial-gradient(circle at 50% 50%, rgba(255, 100, 100, 0.4), transparent)',
-                                    animation: 'redPulse 3s ease-in-out infinite'
-                                }}
-                            />
-                            <div className="relative z-10 flex items-center justify-center h-full">
-                                <ArrowRight className="w-12 h-12 text-white drop-shadow-lg transition-transform group-hover:translate-x-1" />
-                            </div>
-                        </button>
-                        <span className="font-mono text-sm md:text-base text-red-500 tracking-wider uppercase font-bold">
-                            Enter
-                        </span>
-                    </div>
+                            {/* Blue Pill - Party Tank */}
+                            <div className="flex flex-col items-center gap-4">
+                                <button
+                                    onClick={async (e) => {
+                                        e.stopPropagation();
+                                        // Check status and handle Admin Secret Access
+                                        try {
+                                            const storedToken = localStorage.getItem('partySessionToken');
+                                            const headers = { 'Content-Type': 'application/json' };
+                                            if (storedToken) headers['x-session-token'] = storedToken;
 
-                    {/* Blue Pill - Party Tank */}
-                    <div className="flex flex-col items-center gap-4">
-                        <button
-                            onClick={async (e) => {
-                                e.stopPropagation();
-                                // Check status and handle Admin Secret Access
-                                try {
-                                    const storedToken = localStorage.getItem('partySessionToken');
-                                    const headers = { 'Content-Type': 'application/json' };
-                                    if (storedToken) headers['x-session-token'] = storedToken;
+                                            // Refresh status/auth to get latest role and fullness
+                                            const response = await fetch(`${API_BASE}/party/authenticate`, {
+                                                method: 'POST',
+                                                headers,
+                                                body: JSON.stringify({ passkey: 'welcome' })
+                                            });
 
-                                    // Refresh status/auth to get latest role and fullness
-                                    const response = await fetch(`${API_BASE}/party/authenticate`, {
-                                        method: 'POST',
-                                        headers,
-                                        body: JSON.stringify({ passkey: 'welcome' })
-                                    });
+                                            const data = await response.json();
+                                            setPartyStatus(data);
 
-                                    const data = await response.json();
-                                    setPartyStatus(data);
-
-                                    // If Admin AND Party is Full (or enough guests) -> Go to Secret
-                                    if (data.role === 'host' && data.isFull) {
-                                        navigate('/secret');
-                                    }
-                                } catch (error) {
-                                    console.error('Failed to fetch status:', error);
-                                }
-                            }}
-                            className="group relative rounded-full overflow-hidden transition-all duration-500 hover:scale-110"
-                            style={{
-                                width: `${30 - intensity * 2}rem`,
-                                height: `${30 - intensity * 2}rem`,
-                                background: 'radial-gradient(circle at 30% 30%, #4488ff, #0044cc, #002288)',
-                                boxShadow: `0 0 ${30 + intensity * 3}px rgba(0, 100, 255, ${0.5 + intensity * 0.05}), inset 0 0 20px rgba(100, 150, 255, 0.3)`,
-                            }}
-                        >
-                            {/* Rising Water Body - Dynamic based on party status */}
-                            <div
-                                className="absolute inset-x-0 bottom-0 pointer-events-none transition-all duration-700 ease-in-out"
-                                style={{
-                                    height: partyStatus ? `${partyStatus.tankLevel || 0}%` : `${5 + intensity * 9.5}%`,
-                                    background: 'rgba(40, 100, 200, 1)'
-                                }}
-                            >
-                                {/* SVG Wave Surface */}
-                                <svg
-                                    className="waves absolute bottom-full left-0 w-full"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    xmlnsXlink="http://www.w3.org/1999/xlink"
-                                    viewBox="0 24 150 28"
-                                    preserveAspectRatio="none"
-                                    shapeRendering="auto"
+                                            // If Admin AND Party is Full (or enough guests) -> Go to Secret
+                                            if (data.role === 'host' && data.isFull) {
+                                                navigate('/secret');
+                                            }
+                                        } catch (error) {
+                                            console.error('Failed to fetch status:', error);
+                                        }
+                                    }}
+                                    className="group relative rounded-full overflow-hidden transition-all duration-500 hover:scale-110"
                                     style={{
-                                        height: '40px',
-                                        marginBottom: '-1px' // Prevent gap
+                                        width: `${30 - intensity * 2}rem`,
+                                        height: `${30 - intensity * 2}rem`,
+                                        background: 'radial-gradient(circle at 30% 30%, #4488ff, #0044cc, #002288)',
+                                        boxShadow: `0 0 ${30 + intensity * 3}px rgba(0, 100, 255, ${0.5 + intensity * 0.05}), inset 0 0 20px rgba(100, 150, 255, 0.3)`,
                                     }}
                                 >
-                                    <defs>
-                                        <path id="gentle-wave" d="M-160 44c30 0 58-18 88-18s 58 18 88 18 58-18 88-18 58 18 88 18 v44h-352z" />
-                                    </defs>
-                                    <g className="parallax">
-                                        <use xlinkHref="#gentle-wave" x="48" y="0" fill="rgba(100, 180, 255, 0.7)" />
-                                        <use xlinkHref="#gentle-wave" x="48" y="3" fill="rgba(100, 180, 255, 0.5)" />
-                                        <use xlinkHref="#gentle-wave" x="48" y="5" fill="rgba(100, 180, 255, 0.3)" />
-                                        <use xlinkHref="#gentle-wave" x="48" y="7" fill="rgba(40, 100, 200, 1)" />
-                                    </g>
-                                </svg>
-                            </div>
+                                    {/* Rising Water Body - Dynamic based on party status */}
+                                    <div
+                                        className="absolute inset-x-0 bottom-0 pointer-events-none transition-all duration-700 ease-in-out"
+                                        style={{
+                                            height: partyStatus ? `${partyStatus.tankLevel || 0}%` : `${5 + intensity * 9.5}%`,
+                                            background: 'rgba(40, 100, 200, 1)'
+                                        }}
+                                    >
+                                        {/* SVG Wave Surface */}
+                                        <svg
+                                            className="waves absolute bottom-full left-0 w-full"
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            xmlnsXlink="http://www.w3.org/1999/xlink"
+                                            viewBox="0 24 150 28"
+                                            preserveAspectRatio="none"
+                                            shapeRendering="auto"
+                                            style={{
+                                                height: '40px',
+                                                marginBottom: '-1px' // Prevent gap
+                                            }}
+                                        >
+                                            <defs>
+                                                <path id="gentle-wave" d="M-160 44c30 0 58-18 88-18s 58 18 88 18 58-18 88-18 58 18 88 18 v44h-352z" />
+                                            </defs>
+                                            <g className="parallax">
+                                                <use xlinkHref="#gentle-wave" x="48" y="0" fill="rgba(100, 180, 255, 0.7)" />
+                                                <use xlinkHref="#gentle-wave" x="48" y="3" fill="rgba(100, 180, 255, 0.5)" />
+                                                <use xlinkHref="#gentle-wave" x="48" y="5" fill="rgba(100, 180, 255, 0.3)" />
+                                                <use xlinkHref="#gentle-wave" x="48" y="7" fill="rgba(40, 100, 200, 1)" />
+                                            </g>
+                                        </svg>
+                                    </div>
 
-                            <div className="relative z-10 flex items-center justify-center h-full">
-                                <svg className="w-12 h-12 text-white drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                                </svg>
+                                    <div className="relative z-10 flex items-center justify-center h-full">
+                                        <svg className="w-12 h-12 text-white drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                                        </svg>
+                                    </div>
+                                </button>
+                                <span className="font-mono text-sm md:text-base text-blue-400 tracking-wider uppercase font-bold">
+                                    {partyStatus ? `${partyStatus.totalUsers || 0} / ${partyStatus.maxUsers || 5}` : '0 / 5'}
+                                </span>
                             </div>
-                        </button>
-                        <span className="font-mono text-sm md:text-base text-blue-400 tracking-wider uppercase font-bold">
-                            {partyStatus ? `${partyStatus.totalUsers || 0} / ${partyStatus.maxUsers || 5}` : '0 / 5'}
-                        </span>
-                    </div>
+                        </>
+                    )}
                 </div>
             </div >
 
@@ -661,7 +680,6 @@ const LandingPage = () => {
                     100% { transform: rotate(360deg); }
                 }
             `}</style>
-
         </div >
     );
 };
