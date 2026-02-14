@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const DODGE_LIMIT = 7;
 
 const SecretPage = () => {
@@ -32,7 +33,7 @@ const SecretPage = () => {
             const token = localStorage.getItem('partySessionToken');
             if (!token) { navigate('/'); return; }
             try {
-                const response = await fetch('/api/party/authenticate', {
+                const response = await fetch(`${API_BASE}/party/authenticate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'x-session-token': token },
                     body: JSON.stringify({ passkey: 'welcome' })
@@ -102,7 +103,7 @@ const SecretPage = () => {
         // Call logout endpoint to reset party if admin
         if (token) {
             try {
-                await fetch('/api/party/logout', {
+                await fetch(`${API_BASE}/party/logout`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
