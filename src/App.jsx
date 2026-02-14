@@ -138,7 +138,7 @@ function MatrixGate({ onProceed, onTracker }) {
             <div className="space-y-12 animate-in fade-in slide-in-from-right duration-700">
               <div className="space-y-4">
                 <p className="text-xs opacity-50 uppercase tracking-[0.3em]">System Authentication</p>
-                <h1 className="text-4xl font-black text-white leading-none tracking-tighter">WAKE_UP<br />NEO</h1>
+                <h1 className="text-4xl font-black text-white leading-none tracking-tighter">WELCOME<br />NEO</h1>
               </div>
 
               <form onSubmit={handleUnlock} className="space-y-6">

@@ -13,15 +13,30 @@ const LandingPage = () => {
 
     // Party mode state
     const [partyStatus, setPartyStatus] = useState(null);
-    const [userRole, setUserRole] = useState(null); // 'host' or 'guest'
+
+    // Initialize role from localStorage to persist across reloads
+    const [userRole, setUserRole] = useState(() => {
+        return localStorage.getItem('userRole') || null;
+    });
     const [isAuthenticating, setIsAuthenticating] = useState(false);
 
     // Initialize from localStorage to prevent flashing
     const [showPasswordScreen, setShowPasswordScreen] = useState(() => {
         const token = localStorage.getItem('partySessionToken');
-        return !token; // If token exists, don't show password screen
+        const role = localStorage.getItem('userRole');
+        return !token || !role; // Show if no token or role
     });
     const [passwordInput, setPasswordInput] = useState('');
+
+    // Guest-specific states
+    const [hasSubmitted, setHasSubmitted] = useState(() => {
+        return localStorage.getItem('guestHasSubmitted') === 'true';
+    });
+    const [showThankYou, setShowThankYou] = useState(() => {
+        const role = localStorage.getItem('userRole');
+        const submitted = localStorage.getItem('guestHasSubmitted');
+        return role === 'guest' && submitted === 'true';
+    });
 
     // Fetch party status on mount and poll
     useEffect(() => {
@@ -57,9 +72,14 @@ const LandingPage = () => {
                     if (response.ok) {
                         const data = await response.json();
                         if (data.token) localStorage.setItem('partySessionToken', data.token);
+                        if (data.role) localStorage.setItem('userRole', data.role);
                         setUserRole(data.role);
                         setPartyStatus(data);
-                        setShowPasswordScreen(false); // Valid session, hide password screen
+
+                        // Admin: hide password screen, Guest: keep it visible with thank you
+                        if (data.role === 'host') {
+                            setShowPasswordScreen(false);
+                        }
                     } else {
                         // Even on 403 (Party Over), parse data for display
                         const data = await response.json();
@@ -80,19 +100,25 @@ const LandingPage = () => {
                     if (token) headers['x-session-token'] = token;
 
                     const response = await fetch(`${API_BASE}/party/status`, { headers });
-                    const data = await response.json();
 
-                    // Check if session is still valid
-                    if (token && data.sessionValid === false) {
-                        // Session invalidated (admin logged out) - reset to password screen
-                        console.log('Session invalidated, clearing token');
-                        localStorage.removeItem('partySessionToken');
-                        setUserRole(null);
-                        setShowPasswordScreen(true);
+                    // Check for session invalidation (admin logged out)
+                    if (response.status === 401 || response.status === 403) {
+                        console.log('Session invalidated (admin logged out), logging out...');
+                        handleLogout();
+                        return;
                     }
 
-                    // Force update to ensure re-render
-                    setPartyStatus(prev => ({ ...data, _ts: Date.now() }));
+                    const data = await response.json();
+
+                    // Check if session is still valid (alternative check)
+                    if (token && data.sessionValid === false) {
+                        console.log('Session invalidated, clearing token');
+                        handleLogout();
+                        return;
+                    }
+
+                    // Update party status with timestamp to force re-render
+                    setPartyStatus({ ...data, _ts: Date.now() });
                 } catch (error) {
                     console.error('Failed to fetch party status:', error);
                 }
@@ -142,7 +168,7 @@ const LandingPage = () => {
     // Handle password submission
     const handlePasswordSubmit = async (e) => {
         e.preventDefault();
-        if (isAuthenticating) return;
+        if (isAuthenticating || hasSubmitted) return; // Prevent re-submission
 
         setIsAuthenticating(true);
 
@@ -155,21 +181,34 @@ const LandingPage = () => {
 
             if (response.ok) {
                 const data = await response.json();
+
+                // Store token and role in localStorage
                 if (data.token) localStorage.setItem('partySessionToken', data.token);
+                if (data.role) localStorage.setItem('userRole', data.role);
+
                 setUserRole(data.role);
                 setPartyStatus(data);
                 setPasswordInput(''); // Clear input
-                setShowPasswordScreen(false); // Hide password gate for everyone on successful login
 
-                // Only admin can proceed past the password gate
                 if (data.role === 'host') {
-                    // Admin stays on landing page to see pills and can click Red Pill
+                    // Admin: hide password screen and proceed to pills
+                    setShowPasswordScreen(false);
                 } else {
-                    // Guests stay on landing page but see waiting message
+                    // Guest: mark as submitted and show thank you message
+                    setHasSubmitted(true);
+                    localStorage.setItem('guestHasSubmitted', 'true');
+                    setShowThankYou(true);
+                    // Keep password screen visible but show thank you message
                 }
             } else {
-                // Invalid password
-                alert('Invalid password');
+                // Handle error responses
+                const errorData = await response.json();
+
+                if (errorData.partyOver || errorData.limitReached) {
+                    alert(`Party is Over!\n\n${errorData.message || 'The party has reached its limit. Please ask the admin to reset.'}`);
+                } else {
+                    alert('Invalid password');
+                }
                 setPasswordInput('');
             }
         } catch (error) {
@@ -178,6 +217,38 @@ const LandingPage = () => {
         } finally {
             setIsAuthenticating(false);
         }
+    };
+
+    // Handle logout - clear all session data
+    const handleLogout = async () => {
+        const token = localStorage.getItem('partySessionToken');
+        const role = localStorage.getItem('userRole');
+
+        // If admin, call backend to invalidate all sessions
+        if (role === 'host' && token) {
+            try {
+                await fetch(`${API_BASE}/party/logout`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-session-token': token
+                    }
+                });
+                console.log('Admin logged out, all sessions invalidated');
+            } catch (error) {
+                console.error('Logout failed:', error);
+            }
+        }
+
+        // Clear local state for all users
+        localStorage.removeItem('partySessionToken');
+        localStorage.removeItem('userRole');
+        localStorage.removeItem('guestHasSubmitted');
+        setUserRole(null);
+        setShowPasswordScreen(true);
+        setShowThankYou(false);
+        setHasSubmitted(false);
+        setPartyStatus(null);
     };
 
     const intensityRef = useRef(intensity);
@@ -322,31 +393,61 @@ const LandingPage = () => {
         >
             <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
+            {/* Admin Logout Button */}
+            {userRole === 'host' && !showPasswordScreen && (
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation(); // Prevent page click
+                        handleLogout();
+                    }}
+                    className="absolute top-8 right-8 z-30 px-6 py-3 bg-red-500 text-white font-mono font-bold text-sm rounded-lg hover:bg-red-600 transition-all hover:scale-105"
+                    style={{
+                        textShadow: '0 0 10px rgba(255, 0, 0, 0.5)',
+                        boxShadow: '0 0 20px rgba(255, 0, 0, 0.3)'
+                    }}
+                >
+                    LOGOUT
+                </button>
+            )}
+
             {/* Password Gate Overlay */}
             {showPasswordScreen && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black bg-opacity-95">
-                    <form onSubmit={handlePasswordSubmit} className="flex flex-col items-center gap-6 p-8">
-                        <h2 className="font-mono text-3xl font-bold text-green-500 mb-4" style={{ textShadow: '0 0 10px #00ff41' }}>
-                            ENTER PASSWORD
-                        </h2>
-                        <input
-                            type="password"
-                            value={passwordInput}
-                            onChange={(e) => setPasswordInput(e.target.value)}
-                            placeholder="welcome"
-                            autoFocus
-                            className="w-80 px-6 py-4 bg-black border-2 border-green-500 text-green-500 font-mono text-xl rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                            style={{ boxShadow: '0 0 20px rgba(0, 255, 65, 0.3)' }}
-                        />
-                        <button
-                            type="submit"
-                            disabled={isAuthenticating}
-                            className="px-8 py-3 bg-green-500 text-black font-mono font-bold text-lg rounded-lg hover:bg-green-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            style={{ boxShadow: '0 0 20px rgba(0, 255, 65, 0.5)' }}
-                        >
-                            {isAuthenticating ? 'AUTHENTICATING...' : 'ENTER'}
-                        </button>
-                    </form>
+                    {showThankYou ? (
+                        <div className="flex flex-col items-center gap-6 p-8 animate-in fade-in duration-700">
+                            <h2 className="font-mono text-3xl font-bold text-green-500 mb-4" style={{ textShadow: '0 0 10px #00ff41' }}>
+                                YOUR CONTRIBUTION
+                            </h2>
+                            <p className="font-mono text-2xl text-green-400 tracking-wider" style={{ textShadow: '0 0 8px rgba(0, 255, 65, 0.5)' }}>
+                                IS VALUABLE
+                            </p>
+                            <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin mt-4"></div>
+                        </div>
+                    ) : (
+                        <form onSubmit={handlePasswordSubmit} className="flex flex-col items-center gap-6 p-8">
+                            <h2 className="font-mono text-3xl font-bold text-green-500 mb-4" style={{ textShadow: '0 0 10px #00ff41' }}>
+                                ENTER PASSWORD
+                            </h2>
+                            <input
+                                type="password"
+                                value={passwordInput}
+                                onChange={(e) => setPasswordInput(e.target.value)}
+                                placeholder="welcome"
+                                autoFocus
+                                disabled={hasSubmitted}
+                                className="w-80 px-6 py-4 bg-black border-2 border-green-500 text-green-500 font-mono text-xl rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                                style={{ boxShadow: '0 0 20px rgba(0, 255, 65, 0.3)' }}
+                            />
+                            <button
+                                type="submit"
+                                disabled={isAuthenticating || hasSubmitted}
+                                className="px-8 py-3 bg-green-500 text-black font-mono font-bold text-lg rounded-lg hover:bg-green-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                style={{ boxShadow: '0 0 20px rgba(0, 255, 65, 0.5)' }}
+                            >
+                                {isAuthenticating ? 'AUTHENTICATING...' : 'ENTER'}
+                            </button>
+                        </form>
+                    )}
                 </div>
             )}
 
@@ -494,7 +595,12 @@ const LandingPage = () => {
                                     <div
                                         className="absolute inset-x-0 bottom-0 pointer-events-none transition-all duration-700 ease-in-out"
                                         style={{
-                                            height: partyStatus ? `${partyStatus.tankLevel || 0}%` : `${5 + intensity * 9.5}%`,
+                                            height: partyStatus
+                                                ? `${Math.min(100, Math.max(5,
+                                                    (partyStatus.tankLevel ||
+                                                        ((partyStatus.guestCount || partyStatus.totalUsers || 0) / (partyStatus.requiredGuests || partyStatus.maxUsers || 5)) * 100)
+                                                ))}%`
+                                                : `${5 + intensity * 9.5}%`,
                                             background: 'rgba(40, 100, 200, 1)'
                                         }}
                                     >
